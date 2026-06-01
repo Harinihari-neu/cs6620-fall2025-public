@@ -2,14 +2,15 @@ import os
 import re
 import csv
 from io import StringIO
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
 from pydub import AudioSegment
 import tempfile
 
 
-# Version: 1.0.1
-# Built with GitHub Actions
+# Version: 2.0
+# Built with GitHub Actions - Automated Deployment via SSM
 app = Flask(__name__)
 CORS(app)
 
@@ -98,14 +99,11 @@ def serve_audio_file(filename):
     Serves audio files directly to the client's web browser.
     Now supports nested directories using the audio_file_map.
     """
-    # First check if we have a mapping for this filename (from nested directories)
     if filename in audio_file_map:
         file_path = audio_file_map[filename]
         directory = os.path.dirname(file_path)
         file_name = os.path.basename(file_path)
         return send_from_directory(directory, file_name)
-    
-    # Fallback to old behavior for flat directory structure
     elif current_directory and os.path.exists(os.path.join(current_directory, filename)):
         return send_from_directory(current_directory, filename)
     else:
@@ -115,7 +113,6 @@ def serve_audio_file(filename):
 def serve_audio_segment():
     """
     Serves a segment of an audio file, given filename, start, and end times (in seconds).
-    The segment is [start-5, end+5] seconds, clipped to file boundaries.
     """
     filename = request.args.get('file')
     start = request.args.get('start', type=float)
@@ -129,11 +126,10 @@ def serve_audio_segment():
         return "Audio file not found", 404
     try:
         audio = AudioSegment.from_file(audio_path)
-        duration = len(audio) / 1000.0  # in seconds
+        duration = len(audio) / 1000.0
         seg_start = max(0, start - 5)
         seg_end = min(duration, end + 5)
         seg_audio = audio[int(seg_start * 1000):int(seg_end * 1000)]
-        # Write to a temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmpf:
             seg_audio.export(tmpf.name, format='wav')
             tmpf.flush()
@@ -147,13 +143,37 @@ def index():
     """
     Renders the main HTML page for the client-side audio player.
     """
-    return render_template('index.html') 
+    return render_template('index.html')
+
+@app.route('/version')
+def version():
+    """
+    Returns version information to confirm automated deployment.
+    """
+    return f'''
+    <h1>Hello from Automated CI/CD Pipeline!</h1>
+    <p><strong>Version:</strong> 2.0 - Automated Deployment</p>
+    <p><strong>Deployed via:</strong> GitHub Actions + AWS SSM</p>
+    <p><strong>Build Date:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+    <p><strong>Assignment:</strong> Automated EC2 Deployment</p>
+    '''
+
+@app.route('/health')
+def health():
+    """
+    Health check endpoint with version and deployment info.
+    """
+    return jsonify({
+        'status': 'healthy',
+        'version': '2.0',
+        'deployment_method': 'automated',
+        'timestamp': datetime.now().isoformat()
+    })
 
 @app.route('/select_directory', methods=['POST'])
 def select_directory():
     """
     Handles the selection of an audio directory and populates the playlist.
-    Now also includes transcription data if a log file has been uploaded/loaded.
     """
     global current_directory, current_playlist, audio_file_map
 
@@ -169,16 +189,12 @@ def select_directory():
     current_playlist = []
     audio_file_map = {}
     
-    # Recursively load all audio files from the directory and subdirectories
     for root, _, files in os.walk(directory_path):
         for filename in files:
             if filename.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS):
                 full_path = os.path.join(root, filename)
                 current_playlist.append(full_path)
-                # Map just the filename to the full path for CSV lookups
                 audio_file_map[filename] = full_path
-                # Also map filename without extension for CSV compatibility
-                # (CSV has "ac083_2008-04-06" but file is "ac083_2008-04-06.mp3")
                 name_without_ext = os.path.splitext(filename)[0]
                 audio_file_map[name_without_ext] = full_path
     
@@ -221,9 +237,6 @@ def upload_log():
 
     try:
         parsed_transcription_data = parse_log_content(log_content)
-        # Re-select directory to refresh playlist with new transcription data
-        if current_directory:
-            pass # The frontend will call selectDirectory() after a successful upload
         return jsonify({
             "success": True,
             "message": f"Log file uploaded and parsed successfully. {len(parsed_transcription_data)} entries found."
@@ -255,9 +268,6 @@ def load_log_from_path():
             log_content = f.read()
         
         parsed_transcription_data = parse_log_content(log_content)
-        # Re-select directory to refresh playlist with new transcription data
-        if current_directory:
-            pass # The frontend will call selectDirectory() after a successful load
         return jsonify({
             "success": True,
             "message": f"Log file loaded from path and parsed successfully. {len(parsed_transcription_data)} entries found."
@@ -270,11 +280,9 @@ def load_log_from_path():
 @app.route('/status', methods=['GET'])
 def get_status():
     """
-    Returns the current status of the player, including directory and playlist info.
-    Now also indicates if a log file has been loaded and includes transcription data.
+    Returns the current status of the player.
     """
     files_with_transcription_info = []
-    # If a directory has been selected, build the current playlist data for status
     if current_directory:
         for f_path in current_playlist:
             f_name = os.path.basename(f_path)
@@ -295,8 +303,6 @@ def get_status():
     })
 
 
-# Error labeling routes
-
 @app.route('/labeling')
 def labeling():
     """Serve the labeling interface"""
@@ -311,13 +317,11 @@ def load_csv():
     try:
         csv_content = None
         
-        # Check if file was uploaded
         if 'csv_file' in request.files:
             file = request.files['csv_file']
             if file and file.filename:
                 csv_content = file.read().decode('utf-8')
         
-        # Check if path was provided
         elif 'csv_path' in request.form:
             csv_path = request.form['csv_path'].strip()
             if csv_path and os.path.exists(csv_path):
@@ -329,22 +333,17 @@ def load_csv():
         if not csv_content:
             return jsonify({"success": False, "message": "No CSV file provided"})
         
-        # Parse CSV content
         csv_error_data = []
         reader = csv.DictReader(StringIO(csv_content))
         
         for row in reader:
-            # Map actual CSV columns to expected format
             if all(col in row for col in ['recordErrorID', 'recordFile', 'exampleExample', 'recordTime']):
-                # Skip rows where recordTime is empty or invalid
                 try:
                     record_time = time_to_seconds(row['recordTime']) if row['recordTime'].strip() else 0.0
                     record_file = row['recordFile'].strip()
                     
-                    # Debug logging
                     app.logger.info(f"Processing CSV row: ID={row['recordErrorID']}, File='{record_file}', Time={record_time}")
                     
-                    # Skip rows with empty filenames
                     if not record_file:
                         app.logger.warning(f"Skipping row {row['recordErrorID']} - empty filename")
                         continue
@@ -357,7 +356,7 @@ def load_csv():
                     })
                 except (ValueError, AttributeError) as e:
                     app.logger.warning(f"Skipping invalid row: {e}")
-                    continue  # Skip rows with invalid time values
+                    continue
         
         csv_file_loaded = True
         return jsonify({
@@ -389,18 +388,15 @@ def save_label():
     try:
         data = request.get_json()
         
-        # Expected data: record_id, start_time, end_time, audio_file
         if not all(key in data for key in ['record_id', 'start_time', 'end_time', 'audio_file']):
             return jsonify({"success": False, "message": "Missing required fields"})
         
-        # Find the error phrase from the original CSV data
         error_phrase = ""
         for error_record in csv_error_data:
             if str(error_record['record_id']) == str(data['record_id']):
                 error_phrase = error_record['example_phrase']
                 break
         
-        # Prepare the labeled data
         label_data = {
             'record_id': data['record_id'],
             'audio_file': data['audio_file'],
@@ -408,27 +404,18 @@ def save_label():
             'start_time': round(data['start_time'], 3),
             'end_time': round(data['end_time'], 3),
             'duration': round(data['end_time'] - data['start_time'], 3),
-            'labeled_at': __import__('datetime').datetime.now().isoformat()
+            'labeled_at': datetime.now().isoformat()
         }
         
-        # Save to CSV file
         output_file = "/opt/data/labeled-segments.csv"
-        
-        # Check if file exists to determine if we need to write headers
         file_exists = os.path.exists(output_file)
-        
-        # Ensure the directory exists
         os.makedirs("/opt/data", exist_ok=True)
         
         with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
             fieldnames = ['record_id', 'audio_file', 'error_phrase', 'start_time', 'end_time', 'duration', 'labeled_at']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            
-            # Write header if file is new
             if not file_exists:
                 writer.writeheader()
-            
-            # Write the labeled data
             writer.writerow(label_data)
         
         app.logger.info(f"Label saved to {output_file}: Record {data['record_id']}, "
@@ -449,7 +436,6 @@ def save_label():
 def download_labels():
     """Download the labeled segments CSV file"""
     output_file = "/opt/data/labeled-segments.csv"
-    
     if os.path.exists(output_file):
         return send_file(output_file, as_attachment=True, download_name="labeled-segments.csv")
     else:
@@ -458,7 +444,7 @@ def download_labels():
 
 @app.route('/view_labels')
 def view_labels():
-    """View the labeled segments as JSON for display in the interface"""
+    """View the labeled segments as JSON"""
     output_file = "/opt/data/labeled-segments.csv"
     
     if not os.path.exists(output_file):
@@ -469,11 +455,10 @@ def view_labels():
         with open(output_file, 'r', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                # Ensure all expected fields exist with defaults
                 segment = {
                     'record_id': row.get('record_id', ''),
                     'audio_file': row.get('audio_file', ''),
-                    'error_phrase': row.get('error_phrase', ''),  # Handle missing column
+                    'error_phrase': row.get('error_phrase', ''),
                     'start_time': row.get('start_time', '0'),
                     'end_time': row.get('end_time', '0'),
                     'duration': row.get('duration', '0'),
@@ -495,7 +480,6 @@ def view_labels():
 def delete_labels():
     """Delete the labeled segments file"""
     output_file = "/opt/data/labeled-segments.csv"
-    
     try:
         if os.path.exists(output_file):
             os.remove(output_file)
@@ -506,12 +490,10 @@ def delete_labels():
         return jsonify({"success": False, "message": f"Error deleting labels file: {str(e)}"})
 
 
-# Auto-load CSV and audio files on startup
 def auto_load_data():
     """Try to auto-load CSV and audio files from default locations"""
     global csv_error_data, csv_file_loaded, current_directory, current_playlist, audio_file_map
     
-    # Auto-load audio directory
     audio_path = "/opt/audio"
     if os.path.exists(audio_path) and os.path.isdir(audio_path):
         try:
@@ -519,13 +501,11 @@ def auto_load_data():
             current_playlist = []
             audio_file_map = {}
             
-            # Recursively load all audio files
             for root, _, files in os.walk(audio_path):
                 for filename in files:
                     if filename.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS):
                         full_path = os.path.join(root, filename)
                         current_playlist.append(full_path)
-                        # Map full filename and filename without extension
                         audio_file_map[filename] = full_path
                         name_without_ext = os.path.splitext(filename)[0]
                         audio_file_map[name_without_ext] = full_path
@@ -536,7 +516,6 @@ def auto_load_data():
         except Exception as e:
             app.logger.error(f"Failed to auto-load audio files: {e}")
     
-    # Auto-load CSV file - try both possible names
     csv_path = "/opt/data/err-dataset-orig.csv"
     if not os.path.exists(csv_path):
         csv_path = "/opt/data/err-dataset.csv"
@@ -553,8 +532,7 @@ def auto_load_data():
                     try:
                         record_time = time_to_seconds(row['recordTime']) if row['recordTime'].strip() else 0.0
                         record_file = row['recordFile'].strip()
-                        
-                        if record_file:  # Skip empty filenames
+                        if record_file:
                             csv_error_data.append({
                                 'record_id': row['recordErrorID'],
                                 'record_file': record_file,
@@ -562,7 +540,7 @@ def auto_load_data():
                                 'record_time': record_time
                             })
                     except (ValueError, AttributeError):
-                        continue  # Skip rows with invalid time values
+                        continue
             
             csv_file_loaded = True
             app.logger.info(f"Auto-loaded CSV with {len(csv_error_data)} error records")
@@ -572,6 +550,5 @@ def auto_load_data():
 
 
 if __name__ == '__main__':
-    # Auto-load CSV and audio files on startup
     auto_load_data()
     app.run(debug=True, host='0.0.0.0', port=3000)
