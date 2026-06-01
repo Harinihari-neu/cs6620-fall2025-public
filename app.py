@@ -9,7 +9,7 @@ from pydub import AudioSegment
 import tempfile
 
 
-# Version: 2.0
+# Version: 2.0.0
 # Built with GitHub Actions - Automated Deployment via SSM
 app = Flask(__name__)
 CORS(app)
